@@ -3,7 +3,6 @@ name: DLsite Ranking Scraper
 on:
   schedule:
     # 毎日日本時間 10:00（UTC時間 1:00）に実行
-    # ※GitHub Actionsの仕様上、数分〜数十分の開始遅延が発生することがあります
     - cron: '0 1 * * *'
   workflow_dispatch: # 手動で即時実行するための設定
 
@@ -22,6 +21,14 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+
+    # 【デバッグ追加】サーバー上にあるファイルの名前と構造をログに書き出します
+    - name: List files (Debug)
+      run: |
+        echo "=== 現在の実行ディレクトリの絶対パス ==="
+        pwd
+        echo "=== 存在するファイルの一覧 ==="
+        ls -la
 
     - name: Install dependencies
       run: |
