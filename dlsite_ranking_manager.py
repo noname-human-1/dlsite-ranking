@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 # --- 設定 ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
-REPORT_FILE = os.path.join(SCRIPT_DIR, "index.html") 
+REPORT_FILE = os.path.join(SCRIPT_DIR, "index.html")
 LOG_FILE = os.path.join(SCRIPT_DIR, "dlsite_scraper.log")
 DEBUG_HTML_FILE = os.path.join(SCRIPT_DIR, "debug_error.html")
 
@@ -50,11 +50,11 @@ def fetch_ranking():
         
         return response.text
     except Exception as e:
-        logging.error("Webページの取得中に通信エラーが発生しました:", exc_info=True)
+        logging.error("fetch error:", exc_info=True)
         return None
 
 def parse_ranking(html):
-    """HTMLから4分類（リスト形式）のランキングデータを抽出する"""
+    """HTMLから分類（リスト形式）のランキングデータを抽出する（「総合」は除外）"""
     soup = BeautifulSoup(html, 'html.parser')
     
     # 年齢確認ゲートに引っかかっていないかチェック
@@ -63,7 +63,7 @@ def parse_ranking(html):
         save_debug_html(html)
         return None
 
-    # ランキングトップページに並ぶ 4つの ul.ranking_top_worklist タグを検出
+    # ランキングトップページに並ぶ ul.ranking_top_worklist タグを検出
     lists = soup.find_all('ul', class_='ranking_top_worklist')
     
     if not lists:
@@ -76,6 +76,11 @@ def parse_ranking(html):
     parsed_data = {}
     
     for idx, ul in enumerate(lists):
+        # 【修正】分類「総合」（通常は最初のインデックス0番）は収集対象外のためスキップ
+        if idx == 0:
+            logging.info("分類「総合」は収集対象外のためスキップします。")
+            continue
+            
         if idx >= len(categories):
             category_name = f"その他分類_{idx+1}"
         else:
@@ -139,14 +144,13 @@ def parse_ranking(html):
             if thumb_component:
                 candidates_attr = thumb_component.get(':thumb-candidates')
                 if candidates_attr:
-                    # 配列形式の文字列から、最初の画像URLを正規表現で抽出
                     img_match = re.search(r"'(//img\.dlsite\.jp/[^']+)'", candidates_attr)
                     if not img_match:
                         img_match = re.search(r'"(//img\.dlsite\.jp/[^"]+)"', candidates_attr)
                     if img_match:
                         img_url = 'https:' + img_match.group(1)
             
-            # フォールバック（通常のimgタグから探す）
+            # フォールバック
             if not img_url:
                 img_tag = li.find('img')
                 if img_tag:
@@ -179,7 +183,7 @@ def save_debug_html(html):
         logging.error(f"デバッグ用ファイルの書き出しに失敗しました: {e}")
 
 def aggregate_weekly():
-    """過去7日間のデータを集計する"""
+    """過去7日間のデータを集計する（移行期間中の『総合』の混入を防止）"""
     today = datetime.date.today()
     week_dates = [today - datetime.timedelta(days=i) for i in range(7)]
     
@@ -194,6 +198,10 @@ def aggregate_weekly():
                 day_data = json.load(f)
                 
             for category, items in day_data.items():
+                # # 【修正】過去のJSONファイルに残ってしまっている「総合」も即座に集計から排除します
+                # if category == "総合":
+                #     continue
+                    
                 if category not in aggregated:
                     aggregated[category] = {}
                     
@@ -235,65 +243,243 @@ def generate_html(aggregated):
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>DLsite Maniax 週間統合ランキング</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLsite Maniax 週間統合ランキング ({date_range_str})</title>
     <style>
-        body {{ font-family: sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        .category-section {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 40px; border: 1px solid #2e2e2e; }}
-        .category-title {{ font-size: 1.5rem; color: #ffffff; margin-top: 0; margin-bottom: 20px; border-left: 5px solid #3b82f6; padding-left: 10px; }}
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }}
-        .card {{ background: #262626; padding: 15px; border-radius: 6px; border: 1px solid #2e2e2e; display: flex; flex-direction: column; }}
-        .card-header {{ display: flex; gap: 8px; margin-bottom: 12px; }}
-        .badge {{ font-size: 0.75rem; font-weight: bold; padding: 3px 8px; border-radius: 4px; color: #ffffff; }}
-        .badge-rank {{ background: #ef4444; }}
-        .badge-days {{ background: #10b981; }}
-        .badge-id {{ background: #4b5563; }}
-        .card-body {{ display: flex; gap: 12px; flex-grow: 1; }}
-        .thumb-container {{ width: 70px; height: 70px; flex-shrink: 0; border-radius: 4px; overflow: hidden; background: #1a1a1a; border: 1px solid #2e2e2e; }}
-        .thumb {{ width: 100%; height: 100%; object-fit: cover; }}
-        .info {{ display: flex; flex-direction: column; justify-content: flex-start; min-width: 0; }}
-        .work-title {{ font-size: 0.85rem; font-weight: bold; margin: 0 0 6px 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
-        .work-title a {{ color: #ffffff; text-decoration: none; }}
-        .work-title a:hover {{ color: #3b82f6; text-decoration: underline; }}
-        .circle-name {{ font-size: 0.8rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .circle-name a {{ color: #aaa; text-decoration: none; }}
-        .circle-name a:hover {{ color: #3b82f6; }}
-        footer {{ text-align: center; margin-top: 50px; color: #aaa; font-size: 0.8rem; border-top: 1px solid #2e2e2e; padding-top: 20px; }}
+        :root {{
+            --bg-color: #0f172a;
+            --container-bg: #1e293b;
+            --card-bg: #0f172a;
+            --text-color: #f1f5f9;
+            --text-muted: #ffffff;
+            --primary-color: #3b82f6;
+            --border-color: #334155;
+            --rank-bg: #ef4444;
+            --days-bg: #10b981;
+            --rj-bg: rgba(15, 23, 42, 0.75);
+        }}
+        body {{
+            font-family: 'Segoe UI', "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            line-height: 1.5;
+        }}
+        .container {{
+            width: 100%;
+            box-sizing: border-box;
+        }}
+        header {{
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+        }}
+        h1 {{
+            margin: 0 0 10px 0;
+            color: #ffffff;
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.025em;
+        }}
+        .subtitle {{
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }}
+        .category-section {{
+            background-color: var(--container-bg);
+            border-radius: 12px;
+            margin-bottom: 45px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+        }}
+        .category-title {{
+            font-size: 1.6rem;
+            color: #ffffff;
+            margin-top: 0;
+            margin-bottom: 25px;
+            border-left: 6px solid var(--primary-color);
+            padding-left: 12px;
+            font-weight: 700;
+        }}
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 7px;
+        }}
+        .card {{
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        }}
+        .card:hover {{
+            transform: translateY(-6px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            border-color: var(--primary-color);
+        }}
+        .thumb-container {{
+            display: block;
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            background-color: #020617;
+            overflow: hidden;
+            border-bottom: 1px solid var(--border-color);
+        }}
+        .thumb {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }}
+        .card:hover .thumb {{
+            transform: scale(1.00);
+        }}
+        
+        /* バッジを画像の上にオーバーレイ配置 */
+        .badge-overlay-top {{
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }}
+        .badge-overlay-bottom {{
+            position: absolute;
+            bottom: 5px;
+            left: 5px;
+            right: 5px;
+            display: flex;
+            justify-content: flex-end; /* 要素を常に右端に整列させます */
+            align-items: center;
+            z-index: 10;
+        }}
+        .badge {{
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 4px 8px;
+            border-radius: 6px;
+            color: #ffffff;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        }}
+        .badge-rank {{
+            background-color: var(--rank-bg);
+        }}
+        
+        /* ID用の緑色バッジスタイル（リンク要素としてのホバー挙動付き） */
+        .badge-id-green {{
+            background-color: var(--days-bg);
+            text-decoration: none;
+            flex-shrink: 0; /* 縮み防止 */
+            transition: opacity 0.15s ease, background-color 0.15s ease;
+        }}
+        .badge-id-green:hover {{
+            background-color: #059669; /* ホバー時に少し暗い緑にしてクリックしやすくします */
+            color: #ffffff;
+            opacity: 0.9;
+        }}
+        
+        /* カードテキストコンテンツ */
+        .card-content {{
+            padding: 15px 10px 10px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            min-width: 0;
+        }}
+        .work-title {{
+            font-size: 0.9rem;
+            font-weight: 700;
+            line-height: 1.4;
+            margin: 0 0 12px 0;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            height: 2.8em; /* タイトルを2行分で揃え、位置を完璧にアラインします */
+        }}
+        .work-title a {{
+            color: #ffffff;
+            text-decoration: none;
+            transition: color 0.15s ease;
+        }}
+        .work-title a:hover {{
+            color: var(--primary-color);
+        }}
+        .circle-name {{
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: auto; /* サークルリンクをカードの最下部に引き寄せます */
+            min-width: 0; /* flexの圧縮を効かせるため */
+            gap: 10px;
+        }}
+        .circle-name a {{
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.15s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }}
+        .circle-name a:hover {{
+        }}
+        footer {{
+            text-align: center;
+            margin-top: 60px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border-color);
+            padding-top: 25px;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>DLsite Maniax 週間統合ランキング</h1>
-        <p>対象期間: {date_range_str} (期間中に一度でもTop30にランクインした全作品)</p>
+        <header>
+            <h1>DLsite Maniax 週間統合ランキング</h1>
+            <div class="subtitle">対象期間: {date_range_str} (期間中に一度でもTop30にランクインした全作品)</div>
+        </header>
         <main>
 """
     for category, works in aggregated.items():
         sorted_items = sorted(works.values(), key=lambda x: (x['highest_rank'], -x['days_appeared']))
         html_content += f"""
             <section class="category-section">
-                <h2 class="category-title">{category} <span style="font-size: 1rem; color: #aaa; font-weight: normal;">(計 {len(sorted_items)}作品)</span></h2>
+                <h2 class="category-title">{category} <span style="font-size: 1rem; color: var(--text-muted); font-weight: normal;">(計 {len(sorted_items)}作品)</span></h2>
                 <div class="grid">
         """
         for item in sorted_items:
             img_src = item['image'] if item['image'] else "https://www.dlsite.com/images/web/home/no_img_mini.gif"
             html_content += f"""
                     <div class="card">
-                        <div class="card-header">
-                            <span class="badge badge-rank">最高 {item['highest_rank']}位</span>
-                            <span class="badge badge-days">出現 {item['days_appeared']}日</span>
-                            <span class="badge badge-id">{item['id']}</span>
-                        </div>
-                        <div class="card-body">
-                            <div class="thumb-container">
-                                <img class="thumb" src="{img_src}" loading="lazy">
+                        <a class="thumb-container" href="{item['url']}" target="_blank" rel="noopener noreferrer">
+                            <img class="thumb" src="{img_src}" loading="lazy">
+                            <div class="badge-overlay-top">
                             </div>
-                            <div class="info">
-                                <h3 class="work-title">
-                                    <a href="{item['url']}" target="_blank" rel="noopener noreferrer">{item['title']}</a>
-                                </h3>
-                                <div class="circle-name">
-                                    <a href="{item['circle_url']}" target="_blank" rel="noopener noreferrer">{item['circle']}</a>
-                                </div>
+                            <div class="badge-overlay-bottom">
+                                <span class="badge badge-rank">最高 {item['highest_rank']}位</span>
+                            </div>
+                        </a>
+                        <div class="card-content">
+                            <h3 class="work-title">
+                                <a href="{item['url']}" target="_blank" rel="noopener noreferrer">{item['title']}</a>
+                            </h3>
+                            <div class="circle-name">
+                                <a href="{item['circle_url']}" target="_blank" rel="noopener noreferrer">{item['circle']}</a>
+                                <a href="https://www.google.com/search?q={item['id']}" target="_blank" rel="noopener noreferrer" class="badge badge-id-green">{item['id']}</a>
                             </div>
                         </div>
                     </div>
@@ -334,19 +520,17 @@ def main():
             json.dump(today_data, f, ensure_ascii=False, indent=2)
         logging.info(f"本日のデータを保存しました: {today_file}")
         
-        # 4. 日曜日判定、または動作確認用の週次レポート作成
-        if datetime.date.today().weekday() == 6:
-            logging.info("本日は日曜日です。過去1週間の統合集計処理を開始します...")
-            weekly_data = aggregate_weekly()
-            if weekly_data:
-                generate_html(weekly_data)
+        # 4. 【修正】日曜日判定を撤廃し、日次で常に集計＆レポート生成を行うようにしました
+        logging.info("過去1週間の統合集計処理を開始します（日次実行）...")
+        weekly_data = aggregate_weekly()
+        if weekly_data:
+            generate_html(weekly_data)
         else:
-            logging.info("本日は日曜日ではないため、日次データの保存のみで正常終了します。")
+            logging.info("集計データが取得できなかったため、統合HTMLの更新をスキップします。")
             
     except Exception as e:
         logging.critical("実行中に予期せぬ重大な例外が発生しました:", exc_info=True)
     finally:
         logging.info("=== DLsite Ranking Scraper 処理終了 ===")
-
 if __name__ == "__main__":
     main()
