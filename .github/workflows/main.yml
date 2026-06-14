@@ -30,7 +30,7 @@ jobs:
 
     - name: Run Scraper
       run: |
-        python dlsite-ranking/dlsite_ranking_manager.py
+        python dlsite_ranking_manager.py
 
     - name: Commit and push if changes exist
       run: |
